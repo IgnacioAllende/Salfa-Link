@@ -1,0 +1,70 @@
+name: Actualizar dashboard
+
+on:
+  schedule:
+    - cron: "0 10,16,22 * * *"    # corrida completa: 07:00, 13:00 y 19:00 en Chile (verano)
+    - cron: "15,45 10-23 * * *"   # corrida liviana cada 30 min, de 07:15 a 20:45 (verano)
+  workflow_dispatch:              # permite correrlo a mano desde la pestaña Actions (completa)
+
+permissions:
+  contents: read
+  actions: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  actualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: github-pages
+      url: ${{ steps.publicar.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Recuperar mapas ya procesados
+        uses: actions/cache/restore@v4
+        with:
+          path: cache_operaciones
+          key: operaciones-${{ github.run_id }}
+          restore-keys: operaciones-
+
+      - name: Bajar datos de John Deere
+        env:
+          MODO: ${{ github.event.schedule == '15,45 10-23 * * *' && 'liviano' || 'completo' }}
+          JD_CLIENT_ID: ${{ secrets.JD_CLIENT_ID }}
+          JD_CLIENT_SECRET: ${{ secrets.JD_CLIENT_SECRET }}
+          JD_REFRESH_TOKEN: ${{ secrets.JD_REFRESH_TOKEN }}
+        run: python sync_deere.py
+
+      - name: Guardar mapas procesados
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: cache_operaciones
+          key: operaciones-${{ github.run_id }}
+
+      - name: Armar dashboard
+        run: python build_dashboard.py
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+      - name: Publicar
+        id: publicar
+        uses: actions/deploy-pages@v4
